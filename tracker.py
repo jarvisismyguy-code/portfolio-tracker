@@ -173,16 +173,18 @@ def get_t212_account(key_id: str, secret: str) -> dict:
         return {}
 
 def get_all_account_totals() -> dict:
-    """Get cash and totals from both accounts"""
+    """Get totals from both accounts using 'total' field (includes holdings + cash)"""
     invest_account = get_t212_account(T212_INVEST_KEY, T212_INVEST_SECRET)
     isa_account = get_t212_account(T212_ISA_KEY, T212_ISA_SECRET)
     
+    # Note: 'total' in T212 API = total account value (holdings + cash)
+    # 'free' = available cash to invest
     return {
-        "invest_cash": invest_account.get("total", 0) if invest_account else 0,
+        "invest_total": invest_account.get("total", 0) if invest_account else 0,
         "invest_free": invest_account.get("free", 0) if invest_account else 0,
-        "isa_cash": isa_account.get("total", 0) if isa_account else 0,
+        "isa_total": isa_account.get("total", 0) if isa_account else 0,
         "isa_free": isa_account.get("free", 0) if isa_account else 0,
-        "total_cash": (invest_account.get("total", 0) if invest_account else 0) + (isa_account.get("total", 0) if isa_account else 0)
+        "total_portfolio": (invest_account.get("total", 0) if invest_account else 0) + (isa_account.get("total", 0) if isa_account else 0)
     }
 
 def get_technical_indicators(ticker: str, yahoo_tickers: dict = None) -> dict:
@@ -318,10 +320,12 @@ def analyze_portfolio() -> dict:
     report = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "holdings": [],
-        "portfolio_value": 0,
-        "cash_balance": account_totals.get("total_cash", 0),
-        "cash": account_totals,
+        "portfolio_value": account_totals.get("total_portfolio", 0),
         "accounts": {
+            "invest_total": account_totals.get("invest_total", 0),
+            "invest_cash": account_totals.get("invest_free", 0),
+            "isa_total": account_totals.get("isa_total", 0),
+            "isa_cash": account_totals.get("isa_free", 0),
             "invest": invest_count,
             "isa": isa_count
         },
@@ -388,13 +392,12 @@ def analyze_portfolio() -> dict:
         report["holdings"].append(holding_data)
         report["summary"][signal.lower()] += 1
         report["summary"]["total"] += 1
-        report["portfolio_value"] += holding_data["total_value"]
     
-    # Save portfolio split for visual intelligence module
+    # Save portfolio split - use API totals
     portfolio_split = {
         "timestamp": report["timestamp"],
-        "total_value": report["portfolio_value"],
-        "cash": report["cash_balance"],
+        "total_value": report["portfolio_value"],  # API total from both accounts
+        "cash": report["accounts"].get("invest_cash", 0) + report["accounts"].get("isa_cash", 0),
         "holdings": [
             {
                 "ticker": h["ticker"],

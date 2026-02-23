@@ -41,15 +41,62 @@ STOCKS = [
 ]
 
 def get_t212_holdings(key_id: str, secret: str) -> list:
-    """Fetch holdings from Trading212 API"""
-    url = "https://api.trading212.com/v1/accounts"
+    """Fetch holdings from Trading212 API v0"""
+    import base64
+    
+    url = "https://live.trading212.com/api/v0/equity/positions"
+    credentials = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
     headers = {
-        "Authorization": f"Basic {requests.auth.HTTPBasicAuth(key_id, secret).username}:{secret}"
+        "Authorization": f"Basic {credentials}"
     }
     
-    # This is a placeholder - Trading212 API is limited
-    # For now, we'll use the stock list and fetch live prices
-    return []
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            positions = resp.json()
+            holdings = []
+            for pos in positions:
+                instrument = pos.get("instrument", {})
+                # Parse ticker from instrument (e.g., "AAPL_US_EQ" -> "AAPL")
+                ticker_full = instrument.get("ticker", "")
+                ticker = ticker_full.split("_")[0] if ticker_full else ""
+                
+                holdings.append({
+                    "ticker": ticker,
+                    "ticker_full": ticker_full,
+                    "quantity": pos.get("quantity", 0),
+                    "average_price": pos.get("averagePricePaid", 0),
+                    "current_price": pos.get("currentPrice", 0),
+                    "company_name": instrument.get("name", ""),
+                    "currency": instrument.get("currencyCode", ""),
+                    "total_value": pos.get("quantity", 0) * pos.get("currentPrice", 0)
+                })
+            return holdings
+        else:
+            print(f"T212 API error: {resp.status_code} - {resp.text}")
+            return []
+    except Exception as e:
+        print(f"T212 API exception: {e}")
+        return []
+
+def get_t212_account(key_id: str, secret: str) -> dict:
+    """Fetch account cash balance"""
+    import base64
+    
+    url = "https://live.trading212.com/api/v0/equity/account/cash"
+    credentials = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {credentials}"
+    }
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {}
+    except Exception as e:
+        print(f"T212 account API error: {e}")
+        return {}
 
 def get_technical_indicators(ticker: str, yahoo_tickers: dict = None) -> dict:
     """Calculate RSI, MACD, SMA, EMA for a ticker"""
@@ -171,10 +218,20 @@ def search_news(ticker: str, company_name: str) -> list:
         return []
 
 def analyze_portfolio() -> dict:
-    """Main analysis function"""
+    """Main analysis function - uses real T212 holdings"""
+    # First, fetch real holdings from Trading212
+    print("Fetching holdings from Trading212...")
+    t212_holdings = get_t212_holdings(T212_INVEST_KEY, T212_INVEST_SECRET)
+    account_info = get_t212_account(T212_INVEST_KEY, T212_INVEST_SECRET)
+    
+    print(f"Found {len(t212_holdings)} positions in T212")
+    
     report = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "holdings": [],
+        "portfolio_value": 0,
+        "cash_balance": account_info.get("amount", 0) if account_info else 0,
+        "account": account_info,
         "summary": {
             "total": 0,
             "bullish": 0,
@@ -183,39 +240,29 @@ def analyze_portfolio() -> dict:
         }
     }
     
-    # Company names for news search - use Yahoo Finance compatible tickers
+    # If no T212 holdings, fall back to static list
+    tickers_to_analyze = [h["ticker"] for h in t212_holdings] if t212_holdings else STOCKS
+    
+    # Build ticker to holding mapping
+    holding_map = {h["ticker"]: h for h in t212_holdings}
+    
+    # Company names for news search
     company_names = {
-        "MSFT": "Microsoft",
-        "NVDA": "NVIDIA",
-        "META": "Meta Facebook",
-        "GOOGL": "Alphabet Google",
-        "AMD": "AMD",
-        "ASML": "ASML",
-        "AVGO": "Broadcom",
-        "AMZN": "Amazon",
-        "UBER": "Uber",
-        "ORCL": "Oracle",
-        "TTD": "Trade Desk",
-        "NWG.L": "NatWest UK",
-        "BARC.L": "Barclays UK",
-        "CELH": "Celsius Holdings",
-        "NBIS": "Nebius",
-        "ZENA": "ZenaTech",
-        "ALT": "Altimmune",
-        "VUSA.L": "Vanguard S&P 500",
-        "VFEM.L": "Vanguard Emerging Markets",
-        "COPX": "Global X Copper Miners"
+        "MSFT": "Microsoft", "NVDA": "NVIDIA", "META": "Meta Facebook",
+        "GOOGL": "Alphabet Google", "AMD": "AMD", "ASML": "ASML",
+        "AVGO": "Broadcom", "AMZN": "Amazon", "UBER": "Uber",
+        "ORCL": "Oracle", "TTD": "Trade Desk", "NWG": "NatWest",
+        "BARC": "Barclays", "CELH": "Celsius Holdings", "NBIS": "Nebius",
+        "ZENA": "ZenaTech", "ALT": "Altimmune", "VUSA": "Vanguard S&P 500",
+        "VFEM": "Vanguard EM", "COPX": "Copper Miners"
     }
     
-    # Yahoo Finance ticker mapping (UK stocks need .L)
+    # Yahoo Finance ticker mapping
     yahoo_tickers = {
-        "NWG": "NWG.L",
-        "BARC": "BARC.L",
-        "VUSA": "VUSA.L",
-        "VFEM": "VFEM.L"
+        "NWG": "NWG.L", "BARC": "BARC.L", "VUSA": "VUSA.L", "VFEM": "VFEM.L"
     }
     
-    for ticker in STOCKS:
+    for ticker in tickers_to_analyze:
         print(f"Analyzing {ticker}...")
         indicators = get_technical_indicators(ticker, yahoo_tickers)
         
@@ -225,6 +272,51 @@ def analyze_portfolio() -> dict:
         signal, signals_list = get_signal(indicators)
         
         # Get news
+        company = company_names.get(ticker, ticker)
+        news = search_news(ticker, company)
+        
+        # Get T212 holding info if available
+        holding = holding_map.get(ticker, {})
+        
+        holding_data = {
+            "ticker": ticker,
+            "company": company,
+            "signal": signal,
+            "signals": signals_list,
+            "indicators": indicators,
+            "news": news,
+            # T212 specific data
+            "quantity": holding.get("quantity", 0),
+            "average_price": holding.get("average_price", 0),
+            "current_price": holding.get("current_price", indicators.get("price", 0)),
+            "total_value": holding.get("total_value", 0)
+        }
+        
+        report["holdings"].append(holding_data)
+        report["summary"][signal.lower()] += 1
+        report["summary"]["total"] += 1
+        report["portfolio_value"] += holding_data["total_value"]
+    
+    # Save portfolio split for visual intelligence module
+    portfolio_split = {
+        "timestamp": report["timestamp"],
+        "total_value": report["portfolio_value"],
+        "cash": report["cash_balance"],
+        "holdings": [
+            {
+                "ticker": h["ticker"],
+                "value": h["total_value"],
+                "quantity": h["quantity"],
+                "pct": (h["total_value"] / report["portfolio_value"] * 100) if report["portfolio_value"] > 0 else 0
+            }
+            for h in report["holdings"] if h["total_value"] > 0
+        ]
+    }
+    
+    with open("/home/node/.openclaw/workspace/portfolio/portfolio_split.json", "w") as f:
+        json.dump(portfolio_split, f, indent=2)
+    
+    return report
         company = company_names.get(ticker, ticker)
         news = search_news(ticker, company)
         

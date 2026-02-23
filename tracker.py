@@ -50,6 +50,15 @@ def get_t212_holdings(key_id: str, secret: str) -> list:
         "Authorization": f"Basic {credentials}"
     }
     
+    # Ticker mapping for UK/EU stocks
+    ticker_map = {
+        "VFEGl_EQ": "VFEM.L",
+        "COPXl_EQ": "COPX.L",
+        "VUAGl_EQ": "VUSA.L",
+        "NWGl_EQ": "NWG.L",
+        "BARCl_EQ": "BARC.L"
+    }
+    
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
@@ -57,9 +66,19 @@ def get_t212_holdings(key_id: str, secret: str) -> list:
             holdings = []
             for pos in positions:
                 instrument = pos.get("instrument", {})
-                # Parse ticker from instrument (e.g., "AAPL_US_EQ" -> "AAPL")
+                # Parse ticker from instrument (e.g., "VFEGl_EQ" -> "VFEM.L")
                 ticker_full = instrument.get("ticker", "")
-                ticker = ticker_full.split("_")[0] if ticker_full else ""
+                
+                # Check mapping first, then fall back to parsing
+                ticker = ticker_map.get(ticker_full, "")
+                if not ticker:
+                    # Parse: VFEGl_EQ -> VFE -> handle suffix
+                    base_ticker = ticker_full.split("_")[0] if ticker_full else ""
+                    # Remove trailing 'l' from UK stocks
+                    if base_ticker.endswith("l"):
+                        ticker = base_ticker[:-1] + ".L"
+                    else:
+                        ticker = base_ticker
                 
                 holdings.append({
                     "ticker": ticker,
@@ -317,23 +336,7 @@ def analyze_portfolio() -> dict:
         json.dump(portfolio_split, f, indent=2)
     
     return report
-        company = company_names.get(ticker, ticker)
-        news = search_news(ticker, company)
-        
-        holding = {
-            "ticker": ticker,
-            "company": company,
-            "signal": signal,
-            "signals": signals_list,
-            "indicators": indicators,
-            "news": news
-        }
-        
-        report["holdings"].append(holding)
-        report["summary"][signal.lower()] += 1
-        report["summary"]["total"] += 1
-    
-    return report
+
 
 def format_report(report: dict) -> str:
     """Format the report as Discord-friendly text"""

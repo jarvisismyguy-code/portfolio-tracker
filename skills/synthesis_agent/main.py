@@ -12,9 +12,9 @@ from pathlib import Path
 
 # Import from parent modules
 TRACKER_DIR = Path(__file__).parent.parent.parent
-REPORT_FILE = TRACKER_DIR / "portfolio" / "daily_report.json"
+REPORT_FILE = TRACKER_DIR / "daily_report.json"
 FUNDAMENTALS_DIR = TRACKER_DIR / "fundamentals"
-OUTPUT_FILE = TRACKER_DIR / "portfolio" / "synthesis_report.json"
+OUTPUT_FILE = TRACKER_DIR / "synthesis_report.json"
 
 
 # Weights for confidence scoring

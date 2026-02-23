@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Visual Intelligence Skill
-Generates portfolio visualizations: Sankey diagrams, Sector Heatmaps, Pie charts
+Generates portfolio visualizations using matplotlib
 """
 
 import os
@@ -9,14 +9,9 @@ import json
 import pandas as pd
 from pathlib import Path
 
-# Plotly for charts
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    HAS_PLOTLY = True
-except ImportError:
-    HAS_PLOTLY = False
+# Matplotlib for charts
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 # Config
 OUTPUT_DIR = Path(__file__).parent.parent.parent / "outputs"
@@ -76,93 +71,8 @@ def load_portfolio_data() -> dict:
         return json.load(f)
 
 
-def generate_sankey(portfolio: dict) -> str:
-    """Generate Sankey diagram showing capital allocation flow"""
-    if not HAS_PLOTLY:
-        return ""
-    
-    holdings = portfolio.get("holdings", [])
-    if not holdings:
-        return ""
-    
-    # Add sectors
-    for h in holdings:
-        h["sector"] = SECTOR_MAP.get(h["ticker"], "Other")
-    
-    # Aggregate by sector
-    df = pd.DataFrame(holdings)
-    sector_values = df.groupby("sector")["value"].sum().reset_index()
-    sector_values = sector_values.sort_values("value", ascending=False)
-    
-    # Build Sankey
-    sectors = sector_values["sector"].tolist()
-    values = sector_values["value"].tolist()
-    
-    # Create source/target pairs (Cash -> Sector -> Ticker)
-    sources = []
-    targets = []
-    values_link = []
-    
-    # Cash -> Sector
-    sector_idx_map = {s: i for i, s in enumerate(sectors)}
-    
-    for _, row in sector_values.iterrows():
-        sources.append(0)  # Cash is index 0
-        targets.append(sector_idx_map[row["sector"]] + 1)
-        values_link.append(row["value"])
-    
-    # Sector -> Ticker
-    ticker_df = df.sort_values("value", ascending=False)
-    for _, row in ticker_df.iterrows():
-        sources.append(sector_idx_map[row["sector"]] + 1)
-        targets.append(len(sectors) + 1 + list(ticker_df["ticker"]).index(row["ticker"]))
-        values_link.append(row["value"])
-    
-    # Labels
-    labels = ["Cash"] + sectors + ticker_df["ticker"].tolist()
-    
-    # Colors
-    colors = ["#10B981"]  # Cash is green
-    colors += px.colors.qualitative.Set3[:len(sectors)]
-    colors += px.colors.qualitative.Plotly[:len(ticker_df)]
-    
-    fig = go.Figure(data=[go.Sankey(
-        node=dict(
-            pad=15,
-            thickness=20,
-            line=dict(color="black", width=0.5),
-            label=labels,
-            color=colors
-        ),
-        link=dict(
-            source=sources,
-            target=targets,
-            value=values_link,
-            color="rgba(150,150,150,0.4)"
-        )
-    )])
-    
-    fig.update_layout(
-        title=dict(
-            text=f"Portfolio Capital Flow - {portfolio.get('timestamp', '')}",
-            font=dict(size=20)
-        ),
-        font=dict(size=12),
-        height=600,
-        width=1000
-    )
-    
-    output_path = OUTPUT_DIR / "portfolio_sankey.png"
-    fig.write_image(str(output_path), scale=2)
-    print(f"[Visual] Sankey saved to {output_path}")
-    return str(output_path)
-
-
 def generate_sector_heatmap(portfolio: dict) -> str:
-    """Generate sector allocation heatmap"""
-    if not HAS_PLOTLY:
-        return ""
-    
+    """Generate sector allocation bar chart (heatmap alternative)"""
     holdings = portfolio.get("holdings", [])
     if not holdings:
         return ""
@@ -176,46 +86,37 @@ def generate_sector_heatmap(portfolio: dict) -> str:
         "value": "sum",
         "pct": "sum"
     }).reset_index()
-    sector_df = sector_df.sort_values("value", ascending=False)
+    sector_df = sector_df.sort_values("value", ascending=True)
     
-    # Create heatmap-style bar chart
-    fig = go.Figure(go.Bar(
-        x=sector_df["value"],
-        y=sector_df["sector"],
-        orientation='h',
-        marker=dict(
-            color=sector_df["value"],
-            colorscale='Viridis',
-            showscale=True
-        ),
-        text=[f"{v:.1f}%" for v in sector_df["pct"]],
-        textposition='outside'
-    ))
+    # Create horizontal bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
     
-    fig.update_layout(
-        title=dict(
-            text=f"Sector Allocation - {portfolio.get('timestamp', '')}",
-            font=dict(size=20)
-        ),
-        xaxis_title="Value (£)",
-        yaxis_title="",
-        height=500,
-        width=900,
-        showlegend=False,
-        margin=dict(l=150)
-    )
+    colors = plt.cm.viridis([i/len(sector_df) for i in range(len(sector_df))])
     
+    bars = ax.barh(sector_df["sector"], sector_df["value"], color=colors)
+    
+    # Add value labels
+    for bar, pct in zip(bars, sector_df["pct"]):
+        width = bar.get_width()
+        ax.text(width + 50, bar.get_y() + bar.get_height()/2, 
+                f'£{width:,.0f} ({pct:.1f}%)', 
+                va='center', fontsize=10)
+    
+    ax.set_xlabel('Value (£)', fontsize=12)
+    ax.set_title(f'Sector Allocation - {portfolio.get("timestamp", "")}', fontsize=14, fontweight='bold')
+    ax.set_xlim(0, sector_df["value"].max() * 1.3)
+    
+    plt.tight_layout()
     output_path = OUTPUT_DIR / "sector_heatmap.png"
-    fig.write_image(str(output_path), scale=2)
-    print(f"[Visual] Sector heatmap saved to {output_path}")
+    plt.savefig(str(output_path), dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"[Visual] Sector chart saved to {output_path}")
     return str(output_path)
 
 
 def generate_holdings_pie(portfolio: dict) -> str:
     """Generate pie chart of holdings"""
-    if not HAS_PLOTLY:
-        return ""
-    
     holdings = sorted(portfolio.get("holdings", []), key=lambda x: x.get("value", 0), reverse=True)
     if not holdings:
         return ""
@@ -235,36 +136,39 @@ def generate_holdings_pie(portfolio: dict) -> str:
     tickers = [h["ticker"] for h in top_8]
     values = [h["value"] for h in top_8]
     
-    fig = go.Figure(data=[go.Pie(
-        labels=tickers,
-        values=values,
-        hole=0.4,
-        textinfo='label+percent',
-        marker=dict(colors=px.colors.qualitative.Set3)
-    )])
+    fig, ax = plt.subplots(figsize=(10, 8))
     
-    fig.update_layout(
-        title=dict(
-            text=f"Holdings Breakdown - {portfolio.get('timestamp', '')}",
-            font=dict(size=20)
-        ),
-        height=600,
-        width=700,
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+    colors = plt.cm.Set3([i/len(tickers) for i in range(len(tickers))])
+    
+    wedges, texts, autotexts = ax.pie(
+        values, 
+        labels=tickers,
+        autopct='%1.1f%%',
+        colors=colors,
+        explode=[0.02] * len(tickers),
+        startangle=90
     )
     
+    for text in texts:
+        text.set_fontsize(10)
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontweight('bold')
+        autotext.set_fontsize(9)
+    
+    ax.set_title(f'Holdings Breakdown - {portfolio.get("timestamp", "")}', fontsize=14, fontweight='bold')
+    
+    plt.tight_layout()
     output_path = OUTPUT_DIR / "holdings_pie.png"
-    fig.write_image(str(output_path), scale=2)
+    plt.savefig(str(output_path), dpi=150, bbox_inches='tight')
+    plt.close()
+    
     print(f"[Visual] Pie chart saved to {output_path}")
     return str(output_path)
 
 
 def generate_performance_bars(portfolio: dict) -> str:
     """Generate performance comparison bars"""
-    if not HAS_PLOTLY:
-        return ""
-    
     holdings = sorted(portfolio.get("holdings", []), key=lambda x: x.get("value", 0), reverse=True)[:12]
     if not holdings:
         return ""
@@ -273,42 +177,42 @@ def generate_performance_bars(portfolio: dict) -> str:
     values = [h["value"] for h in holdings]
     pct = [h.get("pct", 0) for h in holdings]
     
-    fig = go.Figure()
+    fig, ax1 = plt.subplots(figsize=(12, 6))
     
-    fig.add_trace(go.Bar(
-        x=tickers,
-        y=values,
-        name="Value (£)",
-        marker_color='#3B82F6',
-        yaxis='y'
-    ))
+    # Bar chart for value
+    colors = plt.cm.Blues([0.3 + 0.7*i/len(tickers) for i in range(len(tickers))])
+    bars = ax1.bar(tickers, values, color=colors, alpha=0.8, label='Value (£)')
+    ax1.set_xlabel('Ticker', fontsize=12)
+    ax1.set_ylabel('Value (£)', fontsize=12, color='blue')
+    ax1.tick_params(axis='y', labelcolor='blue')
     
-    fig.add_trace(go.Scatter(
-        x=tickers,
-        y=pct,
-        name="% of Portfolio",
-        yaxis='y2',
-        mode='lines+markers',
-        line=dict(color='#F59E0B', width=3),
-        marker=dict(size=10)
-    ))
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height,
+                f'£{height:,.0f}',
+                ha='center', va='bottom', fontsize=8, rotation=45)
     
-    fig.update_layout(
-        title=dict(
-            text=f"Top Holdings - {portfolio.get('timestamp', '')}",
-            font=dict(size=20)
-        ),
-        height=500,
-        width=1000,
-        yaxis=dict(title="Value (£)", showgrid=True),
-        yaxis2=dict(title="% of Portfolio", overlaying='y', side='right'),
-        legend=dict(x=0.5, y=1.1, orientation='h', xanchor='center'),
-        margin=dict(b=80)
-    )
+    # Second y-axis for percentage
+    ax2 = ax1.twinx()
+    ax2.plot(tickers, pct, 'o-', color='orange', linewidth=2, markersize=8, label='% of Portfolio')
+    ax2.set_ylabel('% of Portfolio', fontsize=12, color='orange')
+    ax2.tick_params(axis='y', labelcolor='orange')
     
+    plt.title(f'Top Holdings - {portfolio.get("timestamp", "")}', fontsize=14, fontweight='bold')
+    plt.xticks(rotation=45, ha='right')
+    
+    # Combined legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+    
+    plt.tight_layout()
     output_path = OUTPUT_DIR / "holdings_bars.png"
-    fig.write_image(str(output_path), scale=2)
-    print(f"[Visual] Performance bars saved to {output_path}")
+    plt.savefig(str(output_path), dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"[Visual] Bar chart saved to {output_path}")
     return str(output_path)
 
 
@@ -323,14 +227,13 @@ def generate_all_charts() -> dict:
     }
     
     # Generate all charts
-    charts = [
-        ("sankey", generate_sankey),
+    chart_funcs = [
         ("sector_heatmap", generate_sector_heatmap),
         ("holdings_pie", generate_holdings_pie),
         ("holdings_bars", generate_performance_bars)
     ]
     
-    for name, func in charts:
+    for name, func in chart_funcs:
         try:
             path = func(portfolio)
             if path:
@@ -345,7 +248,7 @@ def generate_all_charts() -> dict:
 def get_chart_for_discord(chart_type: str = "sector_heatmap") -> str:
     """Get specific chart path for Discord"""
     chart_map = {
-        "sankey": "portfolio_sankey.png",
+        "sankey": "sector_heatmap.png",
         "sector": "sector_heatmap.png",
         "pie": "holdings_pie.png",
         "bars": "holdings_bars.png"

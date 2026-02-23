@@ -172,6 +172,19 @@ def get_t212_account(key_id: str, secret: str) -> dict:
         print(f"T212 account API error: {e}")
         return {}
 
+def get_all_account_totals() -> dict:
+    """Get cash and totals from both accounts"""
+    invest_account = get_t212_account(T212_INVEST_KEY, T212_INVEST_SECRET)
+    isa_account = get_t212_account(T212_ISA_KEY, T212_ISA_SECRET)
+    
+    return {
+        "invest_cash": invest_account.get("total", 0) if invest_account else 0,
+        "invest_free": invest_account.get("free", 0) if invest_account else 0,
+        "isa_cash": isa_account.get("total", 0) if isa_account else 0,
+        "isa_free": isa_account.get("free", 0) if isa_account else 0,
+        "total_cash": (invest_account.get("total", 0) if invest_account else 0) + (isa_account.get("total", 0) if isa_account else 0)
+    }
+
 def get_technical_indicators(ticker: str, yahoo_tickers: dict = None) -> dict:
     """Calculate RSI, MACD, SMA, EMA for a ticker"""
     try:
@@ -297,8 +310,8 @@ def analyze_portfolio() -> dict:
     print("Fetching holdings from Trading212...")
     all_holdings, invest_count, isa_count = get_all_holdings()
     
-    # Get account info from ISA (main account)
-    account_info = get_t212_account(T212_ISA_KEY, T212_ISA_SECRET)
+    # Get cash from both accounts
+    account_totals = get_all_account_totals()
     
     print(f"Found {len(all_holdings)} total positions (Invest: {invest_count}, ISA: {isa_count})")
     
@@ -306,8 +319,8 @@ def analyze_portfolio() -> dict:
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "holdings": [],
         "portfolio_value": 0,
-        "cash_balance": account_info.get("amount", 0) if account_info else 0,
-        "account": account_info,
+        "cash_balance": account_totals.get("total_cash", 0),
+        "cash": account_totals,
         "accounts": {
             "invest": invest_count,
             "isa": isa_count

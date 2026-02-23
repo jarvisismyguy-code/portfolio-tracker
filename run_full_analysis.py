@@ -79,11 +79,18 @@ def run_full_analysis() -> dict:
     # Step 1: Technical Analysis
     print("\n[1/4] Running technical analysis...")
     report = analyze_portfolio()
+    
+    # Save the report
+    report_file = SCRIPT_DIR / "daily_report.json"
+    with open(report_file, "w") as f:
+        json.dump(report, f, indent=2, default=str)
+    
     results["steps"]["technical"] = {
         "status": "success",
-        "holdings_count": len(report.get("holdings", []))
+        "holdings_count": len(report.get("holdings", [])),
+        "portfolio_value": report.get("portfolio_value", 0)
     }
-    print(f"   ✓ Analyzed {len(report.get('holdings', []))} holdings")
+    print(f"   ✓ Analyzed {len(report.get('holdings', []))} holdings (£{report.get('portfolio_value', 0):,.2f})")
     
     # Step 2: Find RSI alerts and extract fundamentals
     print("\n[2/4] Checking for RSI alerts and extracting fundamentals...")

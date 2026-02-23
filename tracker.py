@@ -22,6 +22,7 @@ import os
 T212_INVEST_KEY = os.getenv("T212_INVEST_KEY", "")
 T212_INVEST_SECRET = os.getenv("T212_INVEST_SECRET", "")
 T212_ISA_KEY = os.getenv("T212_ISA_KEY", "")
+T212_ISA_SECRET = os.getenv("T212_ISA_SECRET", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 # Discord config - load from environment
@@ -51,13 +52,51 @@ def get_t212_holdings(key_id: str, secret: str) -> list:
     }
     
     # Ticker mapping for UK/EU stocks
+    # Format: T212 ticker -> Yahoo Finance ticker
     ticker_map = {
         "VFEGl_EQ": "VFEM.L",
         "COPXl_EQ": "COPX.L",
         "VUAGl_EQ": "VUSA.L",
         "NWGl_EQ": "NWG.L",
-        "BARCl_EQ": "BARC.L"
+        "BARCl_EQ": "BARC.L",
+        "RBSl_EQ": "NWG.L",  # RBS -> NatWest
     }
+    
+    def parse_ticker(ticker_full: str) -> str:
+        """Parse T212 ticker format to standard ticker"""
+        # Check mapping first
+        if ticker_full in ticker_map:
+            return ticker_map[ticker_full]
+        
+        # Parse: AMDd_EQ -> AMD, FB_US_EQ -> META, etc.
+        base = ticker_full.split("_")[0]
+        
+        # Remove trailing d/l from UK stocks (AMDd -> AMD, BARCl -> BARC)
+        if base.endswith("d") or base.endswith("l"):
+            base = base[:-1]
+        
+        # Handle US stocks - convert to standard format
+        # FB_US -> META, AMZ -> AMZN, etc.
+        known_us = {
+            "FB": "META",
+            "AMZ": "AMZN",
+            "NVD": "NVDA",
+            "MSF": "MSFT",
+            "ASM": "ASML",
+            "TT8": "TTD",
+            "UT8": "UBER",
+            "ABE": "ABEA",  # maybe typo
+            "ORC": "ORCL",
+            "ORCd": "ORCL",
+            "YND": "YNDX",
+            "1YD": "YNDX",
+            "FB2A": "META",
+        }
+        
+        if base in known_us:
+            return known_us[base]
+        
+        return base
     
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -66,19 +105,8 @@ def get_t212_holdings(key_id: str, secret: str) -> list:
             holdings = []
             for pos in positions:
                 instrument = pos.get("instrument", {})
-                # Parse ticker from instrument (e.g., "VFEGl_EQ" -> "VFEM.L")
                 ticker_full = instrument.get("ticker", "")
-                
-                # Check mapping first, then fall back to parsing
-                ticker = ticker_map.get(ticker_full, "")
-                if not ticker:
-                    # Parse: VFEGl_EQ -> VFE -> handle suffix
-                    base_ticker = ticker_full.split("_")[0] if ticker_full else ""
-                    # Remove trailing 'l' from UK stocks
-                    if base_ticker.endswith("l"):
-                        ticker = base_ticker[:-1] + ".L"
-                    else:
-                        ticker = base_ticker
+                ticker = parse_ticker(ticker_full)
                 
                 holdings.append({
                     "ticker": ticker,
@@ -97,6 +125,33 @@ def get_t212_holdings(key_id: str, secret: str) -> list:
     except Exception as e:
         print(f"T212 API exception: {e}")
         return []
+
+
+def get_all_holdings() -> tuple:
+    """Fetch holdings from both Invest and ISA accounts"""
+    invest_holdings = get_t212_holdings(T212_INVEST_KEY, T212_INVEST_SECRET)
+    isa_holdings = get_t212_holdings(T212_ISA_KEY, T212_ISA_SECRET)
+    
+    # Combine and deduplicate by ticker
+    combined = {}
+    
+    for h in invest_holdings:
+        ticker = h["ticker"]
+        if ticker in combined:
+            combined[ticker]["quantity"] += h["quantity"]
+            combined[ticker]["total_value"] += h["total_value"]
+        else:
+            combined[ticker] = h
+    
+    for h in isa_holdings:
+        ticker = h["ticker"]
+        if ticker in combined:
+            combined[ticker]["quantity"] += h["quantity"]
+            combined[ticker]["total_value"] += h["total_value"]
+        else:
+            combined[ticker] = h
+    
+    return list(combined.values()), len(invest_holdings), len(isa_holdings)
 
 def get_t212_account(key_id: str, secret: str) -> dict:
     """Fetch account cash balance"""
@@ -237,13 +292,15 @@ def search_news(ticker: str, company_name: str) -> list:
         return []
 
 def analyze_portfolio() -> dict:
-    """Main analysis function - uses real T212 holdings"""
-    # First, fetch real holdings from Trading212
+    """Main analysis function - uses real T212 holdings from both accounts"""
+    # Fetch holdings from both Invest and ISA
     print("Fetching holdings from Trading212...")
-    t212_holdings = get_t212_holdings(T212_INVEST_KEY, T212_INVEST_SECRET)
-    account_info = get_t212_account(T212_INVEST_KEY, T212_INVEST_SECRET)
+    all_holdings, invest_count, isa_count = get_all_holdings()
     
-    print(f"Found {len(t212_holdings)} positions in T212")
+    # Get account info from ISA (main account)
+    account_info = get_t212_account(T212_ISA_KEY, T212_ISA_SECRET)
+    
+    print(f"Found {len(all_holdings)} total positions (Invest: {invest_count}, ISA: {isa_count})")
     
     report = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -251,6 +308,10 @@ def analyze_portfolio() -> dict:
         "portfolio_value": 0,
         "cash_balance": account_info.get("amount", 0) if account_info else 0,
         "account": account_info,
+        "accounts": {
+            "invest": invest_count,
+            "isa": isa_count
+        },
         "summary": {
             "total": 0,
             "bullish": 0,
@@ -259,11 +320,11 @@ def analyze_portfolio() -> dict:
         }
     }
     
-    # If no T212 holdings, fall back to static list
-    tickers_to_analyze = [h["ticker"] for h in t212_holdings] if t212_holdings else STOCKS
+    # Use T212 holdings if available, else fall back to static list
+    tickers_to_analyze = [h["ticker"] for h in all_holdings] if all_holdings else STOCKS
     
     # Build ticker to holding mapping
-    holding_map = {h["ticker"]: h for h in t212_holdings}
+    holding_map = {h["ticker"]: h for h in all_holdings}
     
     # Company names for news search
     company_names = {

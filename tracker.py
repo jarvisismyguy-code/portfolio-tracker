@@ -116,7 +116,7 @@ def get_t212_holdings(key_id: str, secret: str) -> list:
                     "current_price": pos.get("currentPrice", 0),
                     "company_name": instrument.get("name", ""),
                     "currency": instrument.get("currencyCode", ""),
-                    "total_value": pos.get("quantity", 0) * pos.get("currentPrice", 0)
+                    "total_value": pos.get("walletImpact", {}).get("currentValue", 0) or pos.get("quantity", 0) * pos.get("currentPrice", 0)
                 })
             return holdings
         else:
